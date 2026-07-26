@@ -68,9 +68,12 @@ def sanitize_tts_text(text):
         '=': ' ',
         '-': ' ',
         ',': ' ',
+        '.': ' ',
         '"': '',
         "'": '',
         '&': ' ',
+        '?': '',
+        '!': '',
         '\n': ' ',
         '\r': ''
     }
@@ -125,16 +128,29 @@ def yemot_api():
     
     def respond(res_text):
         spoken = extract_spoken_text(res_text)
-        logger.info(f"[YEMOT OUTGOING] CallId={call_id} -> User hears: '{spoken}'")
+        logger.info(f"[YEMOT OUTGOING] CallId={call_id} | User hears: '{spoken}'")
+        logger.debug(f"[YEMOT RAW RESPONSE] CallId={call_id} | Full: {res_text}")
         return res_text
 
-    # לוג מקשי מקלדת / פרמטרים שנשלחו ע"י המשתמש
-    ignored_keys = {'ApiPhone', 'ApiCallId', 'ApiExtension', 'hangup', 'ApiHangupExtension'}
-    input_params = {k: v for k, v in request.values.items() if k not in ignored_keys and v != ''}
-    if input_params:
-        logger.info(f"[YEMOT INCOMING INPUT] CallId={call_id}, Phone={phone} -> User pressed/sent: {input_params}")
-    else:
-        logger.debug(f"[YEMOT INCOMING POLL] CallId={call_id}, Phone={phone}")
+    # לוג כל הפרמטרים שנשלחו ע"י ימות המשיח (כולל URL מלא)
+    full_url = request.url
+    logger.info(f"[YEMOT REQUEST] CallId={call_id}, Phone={phone} | URL: {full_url}")
+
+    # לוג מקשי מקלדת / פרמטרים שנשלחו ע"י המשתמש (סינון פרמטרים טכניים של ימות המשיח)
+    user_inputs = {
+        k: v for k, v in request.values.items() 
+        if not (k.startswith('Api') or k.startswith('Wait') or k in ['hangup']) and v != ''
+    }
+    if user_inputs:
+        logger.info(f"[YEMOT INCOMING INPUT] CallId={call_id}, Phone={phone} -> User pressed/sent: {user_inputs}")
+
+    # ==============================================================
+    # פורמט read של ימות המשיח:
+    # read=t-TEXT=VARNAME,tap,max_digits,min_digits,sec_wait,play_ok_mode,block_asterisk,amount_attempts
+    #
+    # המתנה (polling): min_digits=0 כדי שלא תהיה שגיאת "לא הוקשה בחירה"
+    # קלט מהמשתמש:    min_digits=1 כדי שידרוש לפחות ספרה אחת
+    # ==============================================================
 
     # שלב א': זיהוי משתתף
     if call_id not in logged_in_users:
@@ -155,40 +171,57 @@ def yemot_api():
 
                 clean_name = sanitize_tts_text(user_name)
                 logger.info(f"[YEMOT LOGIN SUCCESS] CallId={call_id}, Phone={phone} -> UserId={user_id_input} ({user_name})")
-                return respond(f"read=t-{clean_name} נרשמת בהצלחה אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1")
+                # נרשם בהצלחה -> המתנה: max=1, min=0, sec=3, on_empty(12)=Ok
+                return respond(f"read=t-{clean_name} נרשמת בהצלחה אנא המתן לתחילת המשחק=WaitLobby,,1,0,3,No,,,,,1,Ok,None")
             else:
                 logger.warning(f"[YEMOT LOGIN FAILED] CallId={call_id}, Phone={phone} tried invalid UserId='{user_id_input}'")
-                return respond("read=t-מספר שגוי נסה שוב=UserId,no,2,1,10,No")
+                # מספר שגוי -> קלט מחדש: max=2, min=1, sec=10, no (אישור הקשה)
+                return respond("read=t-מספר שגוי נסה שוב=UserId,,2,1,10,No,,,,,,,,no")
         else:
             logger.debug(f"[YEMOT LOGIN PROMPT] CallId={call_id}, Phone={phone}")
-            return respond("read=t-ברוכים הבאים למשחק הטריויה נא להקיש מספר משתתף וסולמית=UserId,no,2,1,10,No")
+            # בקשת מספר משתתף: max=2, min=1, sec=10, no (אישור הקשה)
+            return respond("read=t-ברוכים הבאים למשחק הטריויה נא להקיש מספר משתתף וסולמית=UserId,,2,1,10,No,,,,,,,,no")
 
     participant_id = logged_in_users[call_id]
     
     # שלב ב': בדיקת סטטוס המשחק
     st = game_state["status"]
     idx = game_state["question_index"]
+    logger.info(f"[YEMOT GAME CHECK] CallId={call_id}, User={participant_id}, Status='{st}', Q{idx}")
+
+    # ==============================================================
+    # פורמט read מהדוקומנטציה הרשמית של ימות המשיח:
+    # VARNAME, use_existing, max, min, sec, play_type, block_asterisk,
+    # block_zero, replace_char, allowed_digits, repeat_count, on_empty, empty_val
+    #
+    # המתנה (polling): min=0, on_empty(12)=Ok → ימות תתקדם ללא שגיאה
+    # קלט מהמשתמש:    min=1, allowed_digits=1234
+    # ==============================================================
 
     if st == "lobby":
-        return respond("read=t-אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1")
+        return respond("read=t-אנא המתן לתחילת המשחק=WaitLobby,,1,0,3,No,,,,,1,Ok,None")
         
     if st == "pause":
-        return respond("read=t-המשחק מושהה אנא המתן=WaitPause,no,1,1,5,No,No,1")
+        return respond("read=t-המשחק מושהה אנא המתן=WaitPause,,1,0,3,No,,,,,1,Ok,None")
 
     if st == "mid_leaderboard":
-        return respond("read=t-תוצאות ביניים מוצגות במסך אנא המתן=WaitMid,no,1,1,5,No,No,1")
+        return respond("read=t-תוצאות ביניים מוצגות במסך אנא המתן=WaitMid,,1,0,3,No,,,,,1,Ok,None")
 
     if st == "endgame":
-        return respond("read=t-המשחק הסתיים תודה רבה על השתתפותכם=WaitEnd,no,1,1,5,No,No,1")
+        return respond("read=t-המשחק הסתיים תודה רבה על השתתפותכם=WaitEnd,,1,0,3,No,,,,,1,Ok,None")
 
     if st == "reveal":
-        return respond(f"read=t-ההצבעה נסגרה אנא המתן לתוצאות=WaitRev_{idx},no,1,1,5,No,No,1")
+        correct_ans = ""
+        if idx < len(QUESTIONS):
+            correct_ans = str(QUESTIONS[idx].get("correct_answer", ""))
+        reveal_msg = f"ההצבעה נסגרה התשובה הנכונה היא תשובה {correct_ans} אנא המתן לתוצאות" if correct_ans else "ההצבעה נסגרה אנא המתן לתוצאות"
+        return respond(f"read=t-{reveal_msg}=WaitRev_{idx},,1,0,3,No,,,,,1,Ok,None")
 
     # שלב ג': משחק פעיל (active)
     if st == "active":
-        # אם המשתמש כבר ענה על השאלה הנוכחית
+        # אם המשתמש כבר ענה על השאלה הנוכחית - המתנה: on_empty=Ok
         if participant_id in game_state["answers"]:
-            return respond(f"read=t-תשובתך נקלטה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1")
+            return respond(f"read=t-תשובתך נקלטה אנא המתן=WaitAns_{idx},,1,0,3,No,,,,,1,Ok,None")
 
         # שולפים קלט ספציפי לשאלה הנוכחית (Answer_Q0, Answer_Q1, וכו')
         param_name = f"Answer_Q{idx}"
@@ -207,11 +240,22 @@ def yemot_api():
                     "choice": answer_input
                 }
                 logger.info(f"[YEMOT ANSWER] User={participant_id} ({USERS.get(participant_id, '')}), Q{idx}, Choice={answer_input}, Correct={is_correct}, Time={time_taken}s")
-            return respond(f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1")
+            # תשובה התקבלה -> המתנה: on_empty=Ok
+            return respond(f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},,1,0,3,No,,,,,1,Ok,None")
         else:
-            return respond(f"read=t-הקש את מספר התשובה=Answer_Q{idx},no,1,1,8,No")
+            # בקשת תשובה: max=1, min=1, sec=10, allowed=1234, no (אישור הקשה)
+            if idx < len(QUESTIONS):
+                current_q = QUESTIONS[idx]
+                q_text = sanitize_tts_text(current_q.get("text", ""))
+                options = current_q.get("options", [])
+                opt_parts = [f"לתשובה {i+1} {sanitize_tts_text(opt)}" for i, opt in enumerate(options)]
+                opt_str = " ".join(opt_parts)
+                full_prompt = f"שאלה {idx + 1} {q_text} {opt_str} הקש את מספר התשובה"
+            else:
+                full_prompt = "הקש את מספר התשובה"
+            return respond(f"read=t-{full_prompt}=Answer_Q{idx},,1,1,10,No,,,,,,,,,no")
 
-    return respond(f"read=t-אנא המתן=WaitGen_{idx},no,1,1,5,No,No,1")
+    return respond(f"read=t-אנא המתן=WaitGen_{idx},,1,0,3,No,,,,,1,Ok,None")
 
 # ==========================================
 # 5. נתיב תצוגה ללוח הבקרה (Display API)

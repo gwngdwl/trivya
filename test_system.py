@@ -49,7 +49,8 @@ class TestYemotTrivia(unittest.TestCase):
 
         # User calls in during active state, prompt is Answer_Q0
         res = self.client.get('/yemot?ApiCallId=CALL100')
-        self.assertIn('read=t-הקש את מספר התשובה=Answer_Q0', res.get_data(as_text=True))
+        self.assertIn('Answer_Q0', res.get_data(as_text=True))
+        self.assertIn('שאלה 1', res.get_data(as_text=True))
 
         # User submits answer 3 for Answer_Q0
         res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=3')
@@ -71,7 +72,8 @@ class TestYemotTrivia(unittest.TestCase):
         # CRITICAL TEST: Yemot sends request preserving old URL query params (including Answer_Q0=3)
         # Ensure system DOES NOT automatically accept Answer_Q0=3 as the answer for Answer_Q1!
         res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=3&WaitAns_0=')
-        self.assertIn('read=t-הקש את מספר התשובה=Answer_Q1', res.get_data(as_text=True))
+        self.assertIn('Answer_Q1', res.get_data(as_text=True))
+        self.assertIn('שאלה 2', res.get_data(as_text=True))
         self.assertNotIn('1', game_state["answers"])  # User has NOT answered question 1 yet!
 
         # Now user submits answer 1 for Answer_Q1
