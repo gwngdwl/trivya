@@ -40,6 +40,7 @@ USERS = load_json(USERS_FILE, {})
 QUESTIONS = load_json(QUESTIONS_FILE, [])
 
 logged_in_users = {}
+last_prompt_spoken = {}
 
 # ==========================================
 # 2. ניהול מצב המערכת
@@ -58,7 +59,7 @@ game_state = {
 # ==========================================
 def sanitize_tts_text(text):
     """
-    מנקה תווים המשתמשים כמפרידים במערכת ימות המשיח (שווה, מקף, פסיק, מרכאות)
+    מנקה תווים המשתמשים כמפרידים במערכת ימות המשיח (שווה, מקף, פסיק, נקודה, מרכאות)
     כדי למנוע שבירה של פורמט ה-read=t-TEXT...
     """
     if not text:
@@ -114,9 +115,6 @@ def extract_spoken_text(yemot_response):
         return spoken
     return str(yemot_response)
 
-# ==========================================
-# 4. נתיבי השרת (Routes) עבור ימות המשיח
-# ==========================================
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -132,6 +130,16 @@ def yemot_api():
         logger.debug(f"[YEMOT RAW RESPONSE] CallId={call_id} | Full: {res_text}")
         return res_text
 
+    def get_prompt_text(prompt_key, full_text):
+        """
+        משמיע את ההודעה המלאה בפעם הראשונה שנכנסים למצב,
+        ואח"כ בבדיקות חוזרות באותו מצב מחזיר רווח (שקט) כדי לא לחזור על ההודעה בלופ.
+        """
+        if last_prompt_spoken.get(call_id) == prompt_key:
+            return " "
+        last_prompt_spoken[call_id] = prompt_key
+        return full_text
+
     # לוג כל הפרמטרים שנשלחו ע"י ימות המשיח (כולל URL מלא)
     full_url = request.url
     logger.info(f"[YEMOT REQUEST] CallId={call_id}, Phone={phone} | URL: {full_url}")
@@ -145,11 +153,12 @@ def yemot_api():
         logger.info(f"[YEMOT INCOMING INPUT] CallId={call_id}, Phone={phone} -> User pressed/sent: {user_inputs}")
 
     # ==============================================================
-    # פורמט read של ימות המשיח:
-    # read=t-TEXT=VARNAME,tap,max_digits,min_digits,sec_wait,play_ok_mode,block_asterisk,amount_attempts
+    # פורמט read מהדוקומנטציה הרשמית של ימות המשיח:
+    # VARNAME, use_existing, max, min, sec, play_type, block_asterisk,
+    # block_zero, replace_char, allowed_digits, repeat_count, on_empty, empty_val
     #
-    # המתנה (polling): min_digits=0 כדי שלא תהיה שגיאת "לא הוקשה בחירה"
-    # קלט מהמשתמש:    min_digits=1 כדי שידרוש לפחות ספרה אחת
+    # המתנה (polling): sec=1 (פולינג מהיר כל שנייה), min=0, on_empty(12)=Ok
+    # קלט מהמשתמש:    min=1, allowed_digits=1234
     # ==============================================================
 
     # שלב א': זיהוי משתתף
@@ -171,15 +180,15 @@ def yemot_api():
 
                 clean_name = sanitize_tts_text(user_name)
                 logger.info(f"[YEMOT LOGIN SUCCESS] CallId={call_id}, Phone={phone} -> UserId={user_id_input} ({user_name})")
-                # נרשם בהצלחה -> המתנה: max=1, min=0, sec=3, on_empty(12)=Ok
-                return respond(f"read=t-{clean_name} נרשמת בהצלחה אנא המתן לתחילת המשחק=WaitLobby,,1,0,3,No,,,,,1,Ok,None")
+                last_prompt_spoken[call_id] = "lobby"
+                return respond(f"read=t-{clean_name} נרשמת בהצלחה אנא המתן לתחילת המשחק=WaitLobby,,1,0,1,No,,,,,1,Ok,None")
             else:
                 logger.warning(f"[YEMOT LOGIN FAILED] CallId={call_id}, Phone={phone} tried invalid UserId='{user_id_input}'")
-                # מספר שגוי -> קלט מחדש: max=2, min=1, sec=10, no (אישור הקשה)
+                last_prompt_spoken[call_id] = "login_failed"
                 return respond("read=t-מספר שגוי נסה שוב=UserId,,2,1,10,No,,,,,,,,no")
         else:
             logger.debug(f"[YEMOT LOGIN PROMPT] CallId={call_id}, Phone={phone}")
-            # בקשת מספר משתתף: max=2, min=1, sec=10, no (אישור הקשה)
+            last_prompt_spoken[call_id] = "login_prompt"
             return respond("read=t-ברוכים הבאים למשחק הטריויה נא להקיש מספר משתתף וסולמית=UserId,,2,1,10,No,,,,,,,,no")
 
     participant_id = logged_in_users[call_id]
@@ -189,39 +198,36 @@ def yemot_api():
     idx = game_state["question_index"]
     logger.info(f"[YEMOT GAME CHECK] CallId={call_id}, User={participant_id}, Status='{st}', Q{idx}")
 
-    # ==============================================================
-    # פורמט read מהדוקומנטציה הרשמית של ימות המשיח:
-    # VARNAME, use_existing, max, min, sec, play_type, block_asterisk,
-    # block_zero, replace_char, allowed_digits, repeat_count, on_empty, empty_val
-    #
-    # המתנה (polling): min=0, on_empty(12)=Ok → ימות תתקדם ללא שגיאה
-    # קלט מהמשתמש:    min=1, allowed_digits=1234
-    # ==============================================================
-
     if st == "lobby":
-        return respond("read=t-אנא המתן לתחילת המשחק=WaitLobby,,1,0,3,No,,,,,1,Ok,None")
+        txt = get_prompt_text("lobby", "אנא המתן לתחילת המשחק")
+        return respond(f"read=t-{txt}=WaitLobby,,1,0,1,No,,,,,1,Ok,None")
         
     if st == "pause":
-        return respond("read=t-המשחק מושהה אנא המתן=WaitPause,,1,0,3,No,,,,,1,Ok,None")
+        txt = get_prompt_text("pause", "המשחק מושהה אנא המתן")
+        return respond(f"read=t-{txt}=WaitPause,,1,0,1,No,,,,,1,Ok,None")
 
     if st == "mid_leaderboard":
-        return respond("read=t-תוצאות ביניים מוצגות במסך אנא המתן=WaitMid,,1,0,3,No,,,,,1,Ok,None")
+        txt = get_prompt_text("mid_leaderboard", "תוצאות ביניים מוצגות במסך אנא המתן")
+        return respond(f"read=t-{txt}=WaitMid,,1,0,1,No,,,,,1,Ok,None")
 
     if st == "endgame":
-        return respond("read=t-המשחק הסתיים תודה רבה על השתתפותכם=WaitEnd,,1,0,3,No,,,,,1,Ok,None")
+        txt = get_prompt_text("endgame", "המשחק הסתיים תודה רבה על השתתפותכם")
+        return respond(f"read=t-{txt}=WaitEnd,,1,0,1,No,,,,,1,Ok,None")
 
     if st == "reveal":
         correct_ans = ""
         if idx < len(QUESTIONS):
             correct_ans = str(QUESTIONS[idx].get("correct_answer", ""))
         reveal_msg = f"ההצבעה נסגרה התשובה הנכונה היא תשובה {correct_ans} אנא המתן לתוצאות" if correct_ans else "ההצבעה נסגרה אנא המתן לתוצאות"
-        return respond(f"read=t-{reveal_msg}=WaitRev_{idx},,1,0,3,No,,,,,1,Ok,None")
+        txt = get_prompt_text(f"reveal_{idx}", reveal_msg)
+        return respond(f"read=t-{txt}=WaitRev_{idx},,1,0,1,No,,,,,1,Ok,None")
 
     # שלב ג': משחק פעיל (active)
     if st == "active":
-        # אם המשתמש כבר ענה על השאלה הנוכחית - המתנה: on_empty=Ok
+        # אם המשתמש כבר ענה על השאלה הנוכחית - המתנה: sec=1, on_empty=Ok
         if participant_id in game_state["answers"]:
-            return respond(f"read=t-תשובתך נקלטה אנא המתן=WaitAns_{idx},,1,0,3,No,,,,,1,Ok,None")
+            txt = get_prompt_text(f"WaitAns_{idx}", "תשובתך נקלטה אנא המתן")
+            return respond(f"read=t-{txt}=WaitAns_{idx},,1,0,1,No,,,,,1,Ok,None")
 
         # שולפים קלט ספציפי לשאלה הנוכחית (Answer_Q0, Answer_Q1, וכו')
         param_name = f"Answer_Q{idx}"
@@ -240,8 +246,9 @@ def yemot_api():
                     "choice": answer_input
                 }
                 logger.info(f"[YEMOT ANSWER] User={participant_id} ({USERS.get(participant_id, '')}), Q{idx}, Choice={answer_input}, Correct={is_correct}, Time={time_taken}s")
-            # תשובה התקבלה -> המתנה: on_empty=Ok
-            return respond(f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},,1,0,3,No,,,,,1,Ok,None")
+            
+            last_prompt_spoken[call_id] = f"WaitAns_{idx}"
+            return respond(f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},,1,0,1,No,,,,,1,Ok,None")
         else:
             # בקשת תשובה: max=1, min=1, sec=10, allowed=1234, no (אישור הקשה)
             if idx < len(QUESTIONS):
@@ -253,9 +260,11 @@ def yemot_api():
                 full_prompt = f"שאלה {idx + 1} {q_text} {opt_str} הקש את מספר התשובה"
             else:
                 full_prompt = "הקש את מספר התשובה"
-            return respond(f"read=t-{full_prompt}=Answer_Q{idx},,1,1,10,No,,,,,,,,,no")
+            last_prompt_spoken[call_id] = f"question_{idx}"
+            return respond(f"read=t-{full_prompt}=Answer_Q{idx},,1,1,10,No,,,,1234,,,,,no")
 
-    return respond(f"read=t-אנא המתן=WaitGen_{idx},,1,0,3,No,,,,,1,Ok,None")
+    txt = get_prompt_text(f"WaitGen_{idx}", "אנא המתן")
+    return respond(f"read=t-{txt}=WaitGen_{idx},,1,0,1,No,,,,,1,Ok,None")
 
 # ==========================================
 # 5. נתיב תצוגה ללוח הבקרה (Display API)
@@ -351,6 +360,7 @@ def reset_game():
     game_state["connected_players"] = {}
     game_state["global_scores"] = {}
     logged_in_users.clear()
+    last_prompt_spoken.clear()
     logger.info("[ADMIN RESET] Game state and connected users completely reset")
     return jsonify({"success": True, "message": "Game reset successfully"})
 
