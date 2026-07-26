@@ -87,7 +87,7 @@ class TestYemotTrivia(unittest.TestCase):
         res = self.client.get('/display')
         data = res.get_json()
         self.assertEqual(data["status"], "lobby")
-        self.assertEqual(data["total_questions"], 3)
+        self.assertEqual(data["total_questions"], 4)
 
         # Test reload endpoint
         res = self.client.post('/api/admin/reload')
@@ -100,5 +100,38 @@ class TestYemotTrivia(unittest.TestCase):
         self.assertEqual(game_state["status"], "lobby")
         self.assertEqual(len(game_state["connected_players"]), 0)
 
+    def test_poll_functionality(self):
+        # Register User 1
+        self.client.get('/yemot?ApiCallId=CALL100&UserId=1')
+        
+        # Advance to Q3 (the Poll question)
+        game_state["question_index"] = 3
+        game_state["status"] = "active"
+        
+        # User calls during active state of poll Q3
+        res = self.client.get('/yemot?ApiCallId=CALL100')
+        self.assertIn('Answer_Q3', res.get_data(as_text=True))
+        self.assertIn('סקר 4', res.get_data(as_text=True))
+        self.assertIn('הקש את מספר האופציה הנבחרת', res.get_data(as_text=True))
+
+        # Submit choice 2
+        res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&Answer_Q3=2')
+        self.assertIn('read=t-תשובתך התקבלה אנא המתן=WaitAns_3', res.get_data(as_text=True))
+        self.assertIn('1', game_state["answers"])
+        self.assertEqual(game_state["answers"]['1']['choice'], '2')
+        self.assertTrue(game_state["answers"]['1']['is_poll'])
+
+        # Admin moves to reveal state
+        self.client.post('/api/admin/auto_next')
+        self.assertEqual(game_state["status"], "reveal")
+        
+        # Poll should not award score points
+        self.assertEqual(game_state["global_scores"]['1']['score'], 0)
+
+        # Check reveal Yemot message
+        res = self.client.get('/yemot?ApiCallId=CALL100')
+        self.assertIn('ההצבעה לסקר נסגרה', res.get_data(as_text=True))
+
 if __name__ == '__main__':
     unittest.main()
+

@@ -215,10 +215,13 @@ def yemot_api():
         return respond(f"read=t-{txt}=WaitEnd,,1,0,1,No,,,,,1,Ok,None")
 
     if st == "reveal":
-        correct_ans = ""
-        if idx < len(QUESTIONS):
-            correct_ans = str(QUESTIONS[idx].get("correct_answer", ""))
-        reveal_msg = f"ההצבעה נסגרה התשובה הנכונה היא תשובה {correct_ans} אנא המתן לתוצאות" if correct_ans else "ההצבעה נסגרה אנא המתן לתוצאות"
+        current_q = QUESTIONS[idx] if idx < len(QUESTIONS) else {}
+        is_poll = (current_q.get("type") == "poll")
+        if is_poll:
+            reveal_msg = "ההצבעה לסקר נסגרה תודה על השתתפותכם אנא המתן לתוצאות"
+        else:
+            correct_ans = str(current_q.get("correct_answer", ""))
+            reveal_msg = f"ההצבעה נסגרה התשובה הנכונה היא תשובה {correct_ans} אנא המתן לתוצאות" if correct_ans else "ההצבעה נסגרה אנא המתן לתוצאות"
         txt = get_prompt_text(f"reveal_{idx}", reveal_msg)
         return respond(f"read=t-{txt}=WaitRev_{idx},,1,0,1,No,,,,,1,Ok,None")
 
@@ -237,15 +240,17 @@ def yemot_api():
             if idx < len(QUESTIONS):
                 time_taken = round(time.time() - game_state["start_time"], 2)
                 current_q = QUESTIONS[idx]
-                is_correct = (answer_input == str(current_q.get("correct_answer", "")))
+                is_poll = (current_q.get("type") == "poll")
+                is_correct = (answer_input == str(current_q.get("correct_answer", ""))) if not is_poll else False
 
                 game_state["answers"][participant_id] = {
                     "name": USERS.get(participant_id, participant_id),
                     "time": time_taken,
                     "correct": is_correct,
-                    "choice": answer_input
+                    "choice": answer_input,
+                    "is_poll": is_poll
                 }
-                logger.info(f"[YEMOT ANSWER] User={participant_id} ({USERS.get(participant_id, '')}), Q{idx}, Choice={answer_input}, Correct={is_correct}, Time={time_taken}s")
+                logger.info(f"[YEMOT ANSWER] User={participant_id} ({USERS.get(participant_id, '')}), Q{idx}, Choice={answer_input}, Correct={is_correct}, Time={time_taken}s, Poll={is_poll}")
             
             last_prompt_spoken[call_id] = f"WaitAns_{idx}"
             return respond(f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},,1,0,1,No,,,,,1,Ok,None")
@@ -253,11 +258,14 @@ def yemot_api():
             # בקשת תשובה: max=1, min=1, sec=10, allowed=1234, no (אישור הקשה)
             if idx < len(QUESTIONS):
                 current_q = QUESTIONS[idx]
+                is_poll = (current_q.get("type") == "poll")
                 q_text = sanitize_tts_text(current_q.get("text", ""))
                 options = current_q.get("options", [])
-                opt_parts = [f"לתשובה {i+1} {sanitize_tts_text(opt)}" for i, opt in enumerate(options)]
+                opt_parts = [f"לאופציה {i+1} {sanitize_tts_text(opt)}" if is_poll else f"לתשובה {i+1} {sanitize_tts_text(opt)}" for i, opt in enumerate(options)]
                 opt_str = " ".join(opt_parts)
-                full_prompt = f"שאלה {idx + 1} {q_text} {opt_str} הקש את מספר התשובה"
+                prompt_prefix = f"סקר {idx + 1}" if is_poll else f"שאלה {idx + 1}"
+                prompt_suffix = "הקש את מספר האופציה הנבחרת" if is_poll else "הקש את מספר התשובה"
+                full_prompt = f"{prompt_prefix} {q_text} {opt_str} {prompt_suffix}"
             else:
                 full_prompt = "הקש את מספר התשובה"
             last_prompt_spoken[call_id] = f"question_{idx}"
@@ -301,13 +309,21 @@ def auto_next():
         game_state["status"] = "reveal"
         correct_count = 0
         total_answers = len(game_state["answers"])
+        current_q = QUESTIONS[idx] if idx < len(QUESTIONS) else {}
+        is_poll = (current_q.get("type") == "poll")
+
         for pid, data in game_state["answers"].items():
-            if data["correct"]:
+            if not is_poll and data.get("correct"):
                 correct_count += 1
                 if pid in game_state["global_scores"]:
                     game_state["global_scores"][pid]["score"] += 1
                     game_state["global_scores"][pid]["time"] += data["time"]
-        logger.info(f"[GAME REVEAL] Q{idx} ended. Submissions: {total_answers}, Correct: {correct_count}")
+        
+        if is_poll:
+            logger.info(f"[POLL REVEAL] Q{idx} ended. Submissions: {total_answers}")
+        else:
+            logger.info(f"[GAME REVEAL] Q{idx} ended. Submissions: {total_answers}, Correct: {correct_count}")
+
 
     elif st == "reveal":
         if idx >= len(QUESTIONS) - 1:

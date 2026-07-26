@@ -149,13 +149,16 @@
                 const response = await fetch('/display');
                 const data = await response.json();
                 
+                let isPoll = data.question && data.question.type === 'poll';
                 if (data.question) {
-                    currentQuestionAnswer = data.question.correct_answer;
+                    currentQuestionAnswer = isPoll ? null : data.question.correct_answer;
                     document.getElementById('question-text').innerText = data.question.text;
-                    document.getElementById('q-counter').innerText = "שאלה " + (data.question_index + 1);
+                    document.getElementById('q-counter').innerText = isPoll ? "📊 סקר דעת קהל" : "שאלה " + (data.question_index + 1);
                     for(let i=1; i<=4; i++) { 
                         if (data.question.options[i-1]) {
                             document.getElementById(`opt-${i}`).innerText = data.question.options[i-1]; 
+                        } else {
+                            document.getElementById(`opt-${i}`).innerText = "...";
                         }
                     }
                 }
@@ -166,7 +169,7 @@
                 document.getElementById('player-count').innerText = currentAnswersCount;
                 
                 let counts = {"1":0, "2":0, "3":0, "4":0};
-                Object.values(data.answers).forEach(ans => { counts[ans.choice]++; });
+                Object.values(data.answers).forEach(ans => { if(ans.choice) counts[ans.choice]++; });
                 
                 for(let i=1; i<=4; i++) {
                     let pct = totalConnected === 0 ? 0 : Math.round((counts[i]/totalConnected)*100);
@@ -242,16 +245,49 @@
                 greenLight.classList.remove('green-on');
                 redLight.classList.add('red-on');
                 
-                if (currentQuestionAnswer) {
+                let isPoll = data.question && data.question.type === 'poll';
+
+                if (!isPoll && currentQuestionAnswer) {
                     document.getElementById(`box-${currentQuestionAnswer}`).classList.add('correct-answer');
                 }
                 
-                let roundWinners = Object.values(data.answers).filter(a => a.correct).sort((a, b) => a.time - b.time).slice(0, 3);
-                let html = '';
-                const medals = ["🥇", "🥈", "🥉"];
-                roundWinners.forEach((w, i) => { html += `<span>${medals[i]} ${w.name} (${w.time.toFixed(1)} שניות)</span>`; });
-                if(html === '') html = '<span>אף אחד לא ענה נכון הפעם... </span>';
-                document.getElementById('round-winners-list').innerHTML = html;
+                if (isPoll) {
+                    let winnersTitle = document.querySelector('#round-winners h3');
+                    if (winnersTitle) winnersTitle.innerText = "📊 תוצאות הסקר 📊";
+                    
+                    let counts = {"1":0, "2":0, "3":0, "4":0};
+                    let totalVotes = Object.keys(data.answers).length;
+                    Object.values(data.answers).forEach(ans => { if (ans.choice) counts[ans.choice]++; });
+                    
+                    let maxVotes = -1;
+                    let topChoice = 1;
+                    for (let i = 1; i <= 4; i++) {
+                        if (counts[i] > maxVotes) {
+                            maxVotes = counts[i];
+                            topChoice = i;
+                        }
+                    }
+
+                    let html = '';
+                    if (totalVotes === 0) {
+                        html = '<span>אין הצבעות בסקר זה</span>';
+                    } else {
+                        let topOptText = (data.question && data.question.options && data.question.options[topChoice - 1]) ? data.question.options[topChoice - 1] : `אופציה ${topChoice}`;
+                        let pct = Math.round((maxVotes / totalVotes) * 100);
+                        html = `<span>🏆 האופציה המובילה: <strong>"${topOptText}"</strong> (${pct}% מההצבעות)</span>`;
+                    }
+                    document.getElementById('round-winners-list').innerHTML = html;
+                } else {
+                    let winnersTitle = document.querySelector('#round-winners h3');
+                    if (winnersTitle) winnersTitle.innerText = "⚡ העונים המהירים ביותר בשאלה זו ⚡";
+                    
+                    let roundWinners = Object.values(data.answers).filter(a => a.correct).sort((a, b) => a.time - b.time).slice(0, 3);
+                    let html = '';
+                    const medals = ["🥇", "🥈", "🥉"];
+                    roundWinners.forEach((w, i) => { html += `<span>${medals[i]} ${w.name} (${w.time.toFixed(1)} שניות)</span>`; });
+                    if(html === '') html = '<span>אף אחד לא ענה נכון הפעם... </span>';
+                    document.getElementById('round-winners-list').innerHTML = html;
+                }
             }
             else if (state === 'mid_leaderboard' || state === 'endgame') {
                 bgMusic.pause();
