@@ -1,7 +1,16 @@
 import os
 import json
 import time
+import logging
+import sys
 from flask import Flask, request, jsonify, render_template
+
+# הגדרת מנגנון הלוגים (Logging)
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+)
+logger = logging.getLogger("yemot_trivia")
 
 app = Flask(__name__)
 application = app  # שורת החובה עבור השרת של PythonAnywhere
@@ -18,9 +27,13 @@ def load_json(filepath, default_value):
     if os.path.exists(filepath):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                logger.info(f"Loaded JSON successfully from {os.path.basename(filepath)} ({len(data)} items)")
+                return data
         except Exception as e:
-            print(f"Error loading {filepath}: {e}")
+            logger.error(f"Error loading {filepath}: {e}")
+    else:
+        logger.warning(f"File not found: {filepath}")
     return default_value
 
 USERS = load_json(USERS_FILE, {})
@@ -88,6 +101,19 @@ def get_targeted_input(param_name):
 # ==========================================
 # 4. נתיבי השרת (Routes) עבור ימות המשיח
 # ==========================================
+def extract_spoken_text(yemot_response):
+    """
+    מחלץ את הטקסט המדובר שיושמע למשתמש מתוך פורמט התשובה של ימות המשיח (read=t-TEXT=...)
+    """
+    if isinstance(yemot_response, str) and yemot_response.startswith("read=t-"):
+        content = yemot_response[len("read=t-"):]
+        spoken = content.split('=')[0]
+        return spoken
+    return str(yemot_response)
+
+# ==========================================
+# 4. נתיבי השרת (Routes) עבור ימות המשיח
+# ==========================================
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -97,6 +123,19 @@ def yemot_api():
     phone = request.values.get('ApiPhone', '0000000')
     call_id = request.values.get('ApiCallId', phone)
     
+    def respond(res_text):
+        spoken = extract_spoken_text(res_text)
+        logger.info(f"[YEMOT OUTGOING] CallId={call_id} -> User hears: '{spoken}'")
+        return res_text
+
+    # לוג מקשי מקלדת / פרמטרים שנשלחו ע"י המשתמש
+    ignored_keys = {'ApiPhone', 'ApiCallId', 'ApiExtension', 'hangup', 'ApiHangupExtension'}
+    input_params = {k: v for k, v in request.values.items() if k not in ignored_keys and v != ''}
+    if input_params:
+        logger.info(f"[YEMOT INCOMING INPUT] CallId={call_id}, Phone={phone} -> User pressed/sent: {input_params}")
+    else:
+        logger.debug(f"[YEMOT INCOMING POLL] CallId={call_id}, Phone={phone}")
+
     # שלב א': זיהוי משתתף
     if call_id not in logged_in_users:
         user_id_input = get_targeted_input('UserId')
@@ -115,11 +154,14 @@ def yemot_api():
                     }
 
                 clean_name = sanitize_tts_text(user_name)
-                return f"read=t-{clean_name} נרשמת בהצלחה אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1"
+                logger.info(f"[YEMOT LOGIN SUCCESS] CallId={call_id}, Phone={phone} -> UserId={user_id_input} ({user_name})")
+                return respond(f"read=t-{clean_name} נרשמת בהצלחה אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1")
             else:
-                return "read=t-מספר שגוי נסה שוב=UserId,no,2,1,10,No"
+                logger.warning(f"[YEMOT LOGIN FAILED] CallId={call_id}, Phone={phone} tried invalid UserId='{user_id_input}'")
+                return respond("read=t-מספר שגוי נסה שוב=UserId,no,2,1,10,No")
         else:
-            return "read=t-ברוכים הבאים למשחק הטריויה נא להקיש מספר משתתף וסולמית=UserId,no,2,1,10,No"
+            logger.debug(f"[YEMOT LOGIN PROMPT] CallId={call_id}, Phone={phone}")
+            return respond("read=t-ברוכים הבאים למשחק הטריויה נא להקיש מספר משתתף וסולמית=UserId,no,2,1,10,No")
 
     participant_id = logged_in_users[call_id]
     
@@ -128,25 +170,25 @@ def yemot_api():
     idx = game_state["question_index"]
 
     if st == "lobby":
-        return "read=t-אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1"
+        return respond("read=t-אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1")
         
     if st == "pause":
-        return "read=t-המשחק מושהה אנא המתן=WaitPause,no,1,1,5,No,No,1"
+        return respond("read=t-המשחק מושהה אנא המתן=WaitPause,no,1,1,5,No,No,1")
 
     if st == "mid_leaderboard":
-        return "read=t-תוצאות ביניים מוצגות במסך אנא המתן=WaitMid,no,1,1,5,No,No,1"
+        return respond("read=t-תוצאות ביניים מוצגות במסך אנא המתן=WaitMid,no,1,1,5,No,No,1")
 
     if st == "endgame":
-        return "read=t-המשחק הסתיים תודה רבה על השתתפותכם=WaitEnd,no,1,1,5,No,No,1"
+        return respond("read=t-המשחק הסתיים תודה רבה על השתתפותכם=WaitEnd,no,1,1,5,No,No,1")
 
     if st == "reveal":
-        return f"read=t-ההצבעה נסגרה אנא המתן לתוצאות=WaitRev_{idx},no,1,1,5,No,No,1"
+        return respond(f"read=t-ההצבעה נסגרה אנא המתן לתוצאות=WaitRev_{idx},no,1,1,5,No,No,1")
 
     # שלב ג': משחק פעיל (active)
     if st == "active":
         # אם המשתמש כבר ענה על השאלה הנוכחית
         if participant_id in game_state["answers"]:
-            return f"read=t-תשובתך נקלטה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1"
+            return respond(f"read=t-תשובתך נקלטה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1")
 
         # שולפים קלט ספציפי לשאלה הנוכחית (Answer_Q0, Answer_Q1, וכו')
         param_name = f"Answer_Q{idx}"
@@ -164,11 +206,12 @@ def yemot_api():
                     "correct": is_correct,
                     "choice": answer_input
                 }
-            return f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1"
+                logger.info(f"[YEMOT ANSWER] User={participant_id} ({USERS.get(participant_id, '')}), Q{idx}, Choice={answer_input}, Correct={is_correct}, Time={time_taken}s")
+            return respond(f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1")
         else:
-            return f"read=t-הקש את מספר התשובה=Answer_Q{idx},no,1,1,8,No"
+            return respond(f"read=t-הקש את מספר התשובה=Answer_Q{idx},no,1,1,8,No")
 
-    return f"read=t-אנא המתן=WaitGen_{idx},no,1,1,5,No,No,1"
+    return respond(f"read=t-אנא המתן=WaitGen_{idx},no,1,1,5,No,No,1")
 
 # ==========================================
 # 5. נתיב תצוגה ללוח הבקרה (Display API)
@@ -203,11 +246,15 @@ def auto_next():
 
     elif st == "active":
         game_state["status"] = "reveal"
+        correct_count = 0
+        total_answers = len(game_state["answers"])
         for pid, data in game_state["answers"].items():
             if data["correct"]:
+                correct_count += 1
                 if pid in game_state["global_scores"]:
                     game_state["global_scores"][pid]["score"] += 1
                     game_state["global_scores"][pid]["time"] += data["time"]
+        logger.info(f"[GAME REVEAL] Q{idx} ended. Submissions: {total_answers}, Correct: {correct_count}")
 
     elif st == "reveal":
         if idx >= len(QUESTIONS) - 1:
@@ -226,24 +273,29 @@ def auto_next():
         game_state["start_time"] = time.time()
         game_state["answers"] = {}
 
+    logger.info(f"[ADMIN AUTO_NEXT] State changed: '{st}' (Q{idx}) -> '{game_state['status']}' (Q{game_state['question_index']})")
     return jsonify({"success": True, "status": game_state["status"], "question_index": game_state["question_index"]})
 
 @app.route('/api/admin/prev', methods=['POST'])
 def prev_question():
+    old_idx = game_state["question_index"]
     if game_state["question_index"] > 0:
         game_state["question_index"] -= 1
         game_state["status"] = "active"
         game_state["start_time"] = time.time()
         game_state["answers"] = {}
+        logger.info(f"[ADMIN PREV] Question index moved from Q{old_idx} to Q{game_state['question_index']}")
     return jsonify({"success": True, "status": game_state["status"], "question_index": game_state["question_index"]})
 
 @app.route('/api/admin/pause', methods=['POST'])
 def toggle_pause():
+    old_st = game_state["status"]
     if game_state["status"] in ["active", "reveal"]:
         game_state["status"] = "pause"
     elif game_state["status"] == "pause":
         game_state["status"] = "active"
         game_state["start_time"] = time.time()
+    logger.info(f"[ADMIN PAUSE] Status toggled: '{old_st}' -> '{game_state['status']}'")
     return jsonify({"success": True, "status": game_state["status"]})
 
 @app.route('/api/admin/reset', methods=['POST'])
@@ -255,6 +307,7 @@ def reset_game():
     game_state["connected_players"] = {}
     game_state["global_scores"] = {}
     logged_in_users.clear()
+    logger.info("[ADMIN RESET] Game state and connected users completely reset")
     return jsonify({"success": True, "message": "Game reset successfully"})
 
 @app.route('/api/admin/reload', methods=['POST'])
@@ -262,6 +315,7 @@ def reload_data():
     global USERS, QUESTIONS
     USERS = load_json(USERS_FILE, {})
     QUESTIONS = load_json(QUESTIONS_FILE, [])
+    logger.info(f"[ADMIN RELOAD] Data reloaded: {len(USERS)} users, {len(QUESTIONS)} questions")
     return jsonify({
         "success": True,
         "users_count": len(USERS),
