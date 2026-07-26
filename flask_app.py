@@ -1,64 +1,35 @@
-from flask import Flask, request, jsonify, render_template
+import os
+import json
 import time
+from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__)
 application = app  # שורת החובה עבור השרת של PythonAnywhere
 
-# ==========================================
-# פונקציית עזר לסינון היסטוריה מימות המשיח
-# ==========================================
-def get_last_val(key):
-    """
-    ימות המשיח משרשרת את כל ההיסטוריה של המשתנה ל-URL.
-    פונקציה זו שולפת רק את הערך האחרון ביותר שנשלח (העדכני ביותר).
-    """
-    vals = request.values.getlist(key)
-    if vals:
-        val = vals[-1].strip()
-        return val if val else None
-    return None
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+USERS_FILE = os.path.join(DATA_DIR, 'users.json')
+QUESTIONS_FILE = os.path.join(DATA_DIR, 'questions.json')
 
 # ==========================================
-# 1. מאגר המידע - רשימת המשתתפים לפי הפתקים
+# 1. טעינת נתונים מקבצי JSON
 # ==========================================
-USERS = {
-    "1": 'שלוימי מרומ"ש', "2": 'בני', "3": 'ריקי', "4": 'יעל', "5": 'תהילה',
-    "6": 'יהודית הוכמן', "7": 'שולמית הוכמן', "8": 'מיכל הוכמן', "9": 'שלוימי קניבסקי',
-    "10": 'יהודה קניבסקי', "11": 'הדסה', "12": 'יוסי יערי', "13": 'שלוימי נתיה"מ',
-    "14": 'מאיר פ"כ', "15": 'מאיר קצוה"ח', "16": 'שלוימי פ"כ', "17": 'רותי',
-    "18": 'חני פ"כ', "19": 'יוסף', "20": 'חיה', "21": 'יאיר', "23": 'חנה',
-    "24": 'מיכאל', "25": 'עקיבא', "26": 'יחיאל', "27": 'נעמי', "28": 'בנימין',
-    "29": 'יהודה נתיה"מ', "30": 'מאיר קניבסקי', "31": 'קובי הוכמן', "32": 'חני הוכמן',
-    "33": 'חני מרומ"ש', "34": 'חני קניבסקי', "35": 'דסי', "36": 'מוישי הוכמן',
-    "37": 'מוישי נתיה"מ', "38": 'שוקי קניבסקי'
-}
+def load_json(filepath, default_value):
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading {filepath}: {e}")
+    return default_value
+
+USERS = load_json(USERS_FILE, {})
+QUESTIONS = load_json(QUESTIONS_FILE, [])
 
 logged_in_users = {}
 
 # ==========================================
-# 2. רשימת השאלות למשחק
-# ==========================================
-QUESTIONS = [
-    {
-        "text": "איזו חיה נקראת 'מלך החיות'?",
-        "options": ["פיל", "נמר", "אריה", "דוב"],
-        "correct_answer": "3"
-    },
-    {
-        "text": "איזה צבע נוצר כשמערבבים כחול וצהוב?",
-        "options": ["ירוק", "סגול", "כתום", "חום"],
-        "correct_answer": "1"
-    },
-    {
-        "text": "כמה זה 5 כפול 5?",
-        "options": ["15", "20", "25", "55"],
-        "correct_answer": "3"
-    }
-    # תוכל להוסיף בחזרה את שאר השאלות שלך לכאן
-]
-
-# ==========================================
-# 3. ניהול מצב המערכת
+# 2. ניהול מצב המערכת
 # ==========================================
 game_state = {
     "question_index": 0,
@@ -70,7 +41,52 @@ game_state = {
 }
 
 # ==========================================
-# 4. נתיבי השרת (Routes)
+# 3. פונקציות עזר וסניטציה עבור ימות המשיח
+# ==========================================
+def sanitize_tts_text(text):
+    """
+    מנקה תווים המשתמשים כמפרידים במערכת ימות המשיח (שווה, מקף, פסיק, מרכאות)
+    כדי למנוע שבירה של פורמט ה-read=t-TEXT...
+    """
+    if not text:
+        return ""
+    text = str(text)
+    replacements = {
+        '=': ' ',
+        '-': ' ',
+        ',': ' ',
+        '"': '',
+        "'": '',
+        '&': ' ',
+        '\n': ' ',
+        '\r': ''
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text.strip()
+
+def get_targeted_input(param_name):
+    """
+    שולף בצורה בטוחה ומדויקת את הקלט שנשלח עבור הפרמטר הספציפי (param_name).
+    מונע זליגה של מקשים שנלחצו בשאלות קודמות ב-URL.
+    """
+    values = request.values.getlist(param_name)
+    if not values:
+        return None
+    
+    # שולפים את הערך האחרון שנשלח עבור פרמטר זה
+    raw_val = values[-1]
+    if raw_val is None:
+        return None
+        
+    val = str(raw_val).strip()
+    if ',' in val:
+        val = val.split(',')[-1].strip()
+        
+    return val if val != "" else None
+
+# ==========================================
+# 4. נתיבי השרת (Routes) עבור ימות המשיח
 # ==========================================
 @app.route('/')
 def home():
@@ -78,30 +94,13 @@ def home():
 
 @app.route('/yemot', methods=['GET', 'POST'])
 def yemot_api():
-    # שימוש בפונקציה החדשה שלנו לכל קליטת נתונים
-    phone = get_last_val('ApiPhone')
-    call_id = get_last_val('ApiCallId') or phone
-    user_id_input = get_last_val('UserId')
+    phone = request.values.get('ApiPhone', '0000000')
+    call_id = request.values.get('ApiCallId', phone)
     
-    idx = game_state["question_index"]
-    answer_var_name = f"Answer_Q{idx}"
-    
-    # 1. מנסים לקלוט את הלחיצה הישירה מהשאלה
-    answer_input = get_last_val(answer_var_name)
-    
-    # 2. מנגנון לכידה מוקדמת חכם ומוגן: מחפש לחיצה רק בהמתנה של השלב שהסתיים הרגע!
-    if not answer_input:
-        if idx == 0:
-            answer_input = get_last_val('WaitLobby')
-        else:
-            answer_input = get_last_val(f'WaitRev_{idx-1}')
-
-    if not phone:
-        phone = "0000000"
-        call_id = "0000000"
-
     # שלב א': זיהוי משתתף
     if call_id not in logged_in_users:
+        user_id_input = get_targeted_input('UserId')
+
         if user_id_input:
             if user_id_input in USERS:
                 logged_in_users[call_id] = user_id_input
@@ -109,9 +108,13 @@ def yemot_api():
                 game_state["connected_players"][user_id_input] = user_name
 
                 if user_id_input not in game_state["global_scores"]:
-                    game_state["global_scores"][user_id_input] = {"name": user_name, "score": 0, "time": 0.0}
+                    game_state["global_scores"][user_id_input] = {
+                        "name": user_name,
+                        "score": 0,
+                        "time": 0.0
+                    }
 
-                clean_name = user_name.replace('"', '')
+                clean_name = sanitize_tts_text(user_name)
                 return f"read=t-{clean_name} נרשמת בהצלחה אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1"
             else:
                 return "read=t-מספר שגוי נסה שוב=UserId,no,2,1,10,No"
@@ -120,49 +123,72 @@ def yemot_api():
 
     participant_id = logged_in_users[call_id]
     
-    # טיפול במצבי המתנה והשהיה
-    if game_state["status"] == "lobby":
+    # שלב ב': בדיקת סטטוס המשחק
+    st = game_state["status"]
+    idx = game_state["question_index"]
+
+    if st == "lobby":
         return "read=t-אנא המתן לתחילת המשחק=WaitLobby,no,1,1,5,No,No,1"
         
-    if game_state["status"] == "pause":
+    if st == "pause":
         return "read=t-המשחק מושהה אנא המתן=WaitPause,no,1,1,5,No,No,1"
 
-    if game_state["status"] == "active":
-        if participant_id not in game_state["answers"]:
-            # מוודאים שהתשובה חוקית (מסננים כל לחיצה אקראית אחרת)
-            if answer_input and answer_input in ["1", "2", "3", "4"]: 
-                if len(QUESTIONS) > game_state["question_index"]:
-                    time_taken = time.time() - game_state["start_time"]
-                    current_q = QUESTIONS[game_state["question_index"]]
-                    is_correct = (answer_input == current_q.get("correct_answer", ""))
+    if st == "mid_leaderboard":
+        return "read=t-תוצאות ביניים מוצגות במסך אנא המתן=WaitMid,no,1,1,5,No,No,1"
 
-                    game_state["answers"][participant_id] = {
-                        "name": USERS[participant_id], "time": time_taken,
-                        "correct": is_correct, "choice": answer_input
-                    }
-                return f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1"
-            else:
-                return f"read=t-הקש את מספר התשובה={answer_var_name},no,1,1,8,No"
+    if st == "endgame":
+        return "read=t-המשחק הסתיים תודה רבה על השתתפותכם=WaitEnd,no,1,1,5,No,No,1"
+
+    if st == "reveal":
+        return f"read=t-ההצבעה נסגרה אנא המתן לתוצאות=WaitRev_{idx},no,1,1,5,No,No,1"
+
+    # שלב ג': משחק פעיל (active)
+    if st == "active":
+        # אם המשתמש כבר ענה על השאלה הנוכחית
+        if participant_id in game_state["answers"]:
+            return f"read=t-תשובתך נקלטה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1"
+
+        # שולפים קלט ספציפי לשאלה הנוכחית (Answer_Q0, Answer_Q1, וכו')
+        param_name = f"Answer_Q{idx}"
+        answer_input = get_targeted_input(param_name)
+
+        if answer_input and answer_input in ["1", "2", "3", "4"]: 
+            if idx < len(QUESTIONS):
+                time_taken = round(time.time() - game_state["start_time"], 2)
+                current_q = QUESTIONS[idx]
+                is_correct = (answer_input == str(current_q.get("correct_answer", "")))
+
+                game_state["answers"][participant_id] = {
+                    "name": USERS.get(participant_id, participant_id),
+                    "time": time_taken,
+                    "correct": is_correct,
+                    "choice": answer_input
+                }
+            return f"read=t-תשובתך התקבלה אנא המתן=WaitAns_{idx},no,1,1,5,No,No,1"
         else:
-            return f"read=t-כבר ענית על השאלה=WaitAns_{idx},no,1,1,5,No,No,1"
+            return f"read=t-הקש את מספר התשובה=Answer_Q{idx},no,1,1,8,No"
 
-    # שלב חשיפת התשובות או סיום המשחק
-    return f"read=t-ההצבעה נסגרה אנא המתן=WaitRev_{idx},no,1,1,5,No,No,1"
+    return f"read=t-אנא המתן=WaitGen_{idx},no,1,1,5,No,No,1"
 
-
+# ==========================================
+# 5. נתיב תצוגה ללוח הבקרה (Display API)
+# ==========================================
 @app.route('/display', methods=['GET'])
 def display():
+    idx = game_state["question_index"]
+    current_q = QUESTIONS[idx] if idx < len(QUESTIONS) else None
     return jsonify({
         "status": game_state["status"],
-        "question": QUESTIONS[game_state["question_index"]] if len(QUESTIONS) > game_state["question_index"] else None,
+        "question": current_q,
         "answers": game_state["answers"],
         "connected_players": game_state["connected_players"],
         "global_scores": game_state["global_scores"],
-        "question_index": game_state["question_index"]
+        "question_index": idx,
+        "total_questions": len(QUESTIONS)
     })
 
 # ==========================================
-# פקודות ניהול (מקלדת / כפתורים)
+# 6. פקודות ניהול (Admin API)
 # ==========================================
 @app.route('/api/admin/auto_next', methods=['POST'])
 def auto_next():
@@ -179,8 +205,9 @@ def auto_next():
         game_state["status"] = "reveal"
         for pid, data in game_state["answers"].items():
             if data["correct"]:
-                game_state["global_scores"][pid]["score"] += 1
-                game_state["global_scores"][pid]["time"] += data["time"]
+                if pid in game_state["global_scores"]:
+                    game_state["global_scores"][pid]["score"] += 1
+                    game_state["global_scores"][pid]["time"] += data["time"]
 
     elif st == "reveal":
         if idx >= len(QUESTIONS) - 1:
@@ -199,7 +226,7 @@ def auto_next():
         game_state["start_time"] = time.time()
         game_state["answers"] = {}
 
-    return jsonify({"success": True})
+    return jsonify({"success": True, "status": game_state["status"], "question_index": game_state["question_index"]})
 
 @app.route('/api/admin/prev', methods=['POST'])
 def prev_question():
@@ -208,16 +235,38 @@ def prev_question():
         game_state["status"] = "active"
         game_state["start_time"] = time.time()
         game_state["answers"] = {}
-    return jsonify({"success": True})
+    return jsonify({"success": True, "status": game_state["status"], "question_index": game_state["question_index"]})
 
 @app.route('/api/admin/pause', methods=['POST'])
 def toggle_pause():
-    if game_state["status"] == "active" or game_state["status"] == "reveal":
+    if game_state["status"] in ["active", "reveal"]:
         game_state["status"] = "pause"
     elif game_state["status"] == "pause":
         game_state["status"] = "active"
         game_state["start_time"] = time.time()
-    return jsonify({"success": True})
+    return jsonify({"success": True, "status": game_state["status"]})
+
+@app.route('/api/admin/reset', methods=['POST'])
+def reset_game():
+    game_state["question_index"] = 0
+    game_state["status"] = "lobby"
+    game_state["start_time"] = 0
+    game_state["answers"] = {}
+    game_state["connected_players"] = {}
+    game_state["global_scores"] = {}
+    logged_in_users.clear()
+    return jsonify({"success": True, "message": "Game reset successfully"})
+
+@app.route('/api/admin/reload', methods=['POST'])
+def reload_data():
+    global USERS, QUESTIONS
+    USERS = load_json(USERS_FILE, {})
+    QUESTIONS = load_json(QUESTIONS_FILE, [])
+    return jsonify({
+        "success": True,
+        "users_count": len(USERS),
+        "questions_count": len(QUESTIONS)
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=True)
