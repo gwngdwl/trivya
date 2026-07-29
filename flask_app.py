@@ -3,6 +3,7 @@ import json
 import time
 import logging
 import sys
+import random
 from flask import Flask, request, jsonify, render_template
 
 # הגדרת מנגנון הלוגים (Logging)
@@ -38,6 +39,7 @@ def load_json(filepath, default_value):
 
 USERS = load_json(USERS_FILE, {})
 QUESTIONS = load_json(QUESTIONS_FILE, [])
+random.shuffle(QUESTIONS)
 
 logged_in_users = {}
 last_prompt_spoken = {}
@@ -379,6 +381,7 @@ def toggle_pause():
 
 @app.route('/api/admin/reset', methods=['POST'])
 def reset_game():
+    random.shuffle(QUESTIONS)
     game_state["question_index"] = 0
     game_state["status"] = "lobby"
     game_state["start_time"] = 0
@@ -387,7 +390,7 @@ def reset_game():
     game_state["global_scores"] = {}
     logged_in_users.clear()
     last_prompt_spoken.clear()
-    logger.info("[ADMIN RESET] Game state and connected users completely reset")
+    logger.info("[ADMIN RESET] Game state and connected users completely reset, questions reshuffled")
     return jsonify({"success": True, "message": "Game reset successfully"})
 
 @app.route('/api/admin/reload', methods=['POST'])
@@ -395,6 +398,7 @@ def reload_data():
     global USERS, QUESTIONS
     USERS = load_json(USERS_FILE, {})
     QUESTIONS = load_json(QUESTIONS_FILE, [])
+    random.shuffle(QUESTIONS)
     logger.info(f"[ADMIN RELOAD] Data reloaded: {len(USERS)} users, {len(QUESTIONS)} questions")
     return jsonify({
         "success": True,
