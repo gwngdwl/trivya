@@ -132,6 +132,18 @@ class TestYemotTrivia(unittest.TestCase):
         res = self.client.get('/yemot?ApiCallId=CALL100')
         self.assertIn('ההצבעה לסקר נסגרה', res.get_data(as_text=True))
 
+    def test_hangup_cleans_up_call_and_connected_players(self):
+        # Register User 1
+        self.client.get('/yemot?ApiCallId=CALL100&UserId=1')
+        self.assertEqual(logged_in_users.get('CALL100'), '1')
+        self.assertIn('1', game_state["connected_players"])
+
+        # Yemot sends hangup=yes on the final request for the call
+        res = self.client.get('/yemot?ApiCallId=CALL100&hangup=yes')
+        self.assertEqual(res.get_data(as_text=True), "")
+        self.assertNotIn('CALL100', logged_in_users)
+        self.assertNotIn('1', game_state["connected_players"])
+
 if __name__ == '__main__':
     unittest.main()
 

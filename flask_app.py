@@ -140,6 +140,16 @@ def yemot_api():
         last_prompt_spoken[call_id] = prompt_key
         return full_text
 
+    # ניתוק שיחה: ימות המשיח שולח hangup=yes בבקשה האחרונה עבור השיחה.
+    # מנקים את הזיכרון של השיחה כדי לא לצבור דליפת זיכרון לאורך זמן.
+    if request.values.get('hangup') == 'yes':
+        hung_up_participant_id = logged_in_users.pop(call_id, None)
+        last_prompt_spoken.pop(call_id, None)
+        if hung_up_participant_id is not None:
+            game_state["connected_players"].pop(hung_up_participant_id, None)
+        logger.info(f"[YEMOT HANGUP] CallId={call_id}, Phone={phone} -> Cleaned up call state")
+        return respond("")
+
     # לוג כל הפרמטרים שנשלחו ע"י ימות המשיח (כולל URL מלא)
     full_url = request.url
     logger.info(f"[YEMOT REQUEST] CallId={call_id}, Phone={phone} | URL: {full_url}")
