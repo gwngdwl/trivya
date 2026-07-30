@@ -3,10 +3,40 @@ import unittest
 import json
 from flask_app import app, game_state, logged_in_users, USERS, QUESTIONS
 
+TEST_QUESTIONS = [
+    {
+        "id": 1,
+        "text": "מהי בירת ישראל?",
+        "options": ["ירושלים", "תל אביב", "חיפה", "באר שבע"],
+        "correct_answer": "1"
+    },
+    {
+        "id": 2,
+        "text": "שאלה 2",
+        "options": ["א1", "א2", "א3", "א4"],
+        "correct_answer": "1"
+    },
+    {
+        "id": 3,
+        "text": "שאלה 3",
+        "options": ["א1", "א2", "א3", "א4"],
+        "correct_answer": "1"
+    },
+    {
+        "id": 4,
+        "type": "poll",
+        "text": "שאלת סקר בדיקה",
+        "options": ["אופציה 1", "אופציה 2", "אופציה 3", "אופציה 4"]
+    }
+]
+
 class TestYemotTrivia(unittest.TestCase):
 
     def setUp(self):
         self.client = app.test_client()
+        # Set flask_app.QUESTIONS deterministically for tests
+        import flask_app
+        flask_app.QUESTIONS = [dict(q) for q in TEST_QUESTIONS]
         # Reset game state before each test
         game_state["question_index"] = 0
         game_state["status"] = "lobby"
@@ -52,11 +82,11 @@ class TestYemotTrivia(unittest.TestCase):
         self.assertIn('Answer_Q0', res.get_data(as_text=True))
         self.assertIn('שאלה 1', res.get_data(as_text=True))
 
-        # User submits answer 3 for Answer_Q0
-        res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=3')
+        # User submits correct answer (1) for Answer_Q0
+        res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=1')
         self.assertIn('read=t-תשובתך התקבלה אנא המתן=WaitAns_0', res.get_data(as_text=True))
         self.assertIn('1', game_state["answers"])
-        self.assertEqual(game_state["answers"]['1']['choice'], '3')
+        self.assertEqual(game_state["answers"]['1']['choice'], '1')
         self.assertTrue(game_state["answers"]['1']['correct'])
 
         # Admin moves to reveal state
@@ -69,15 +99,15 @@ class TestYemotTrivia(unittest.TestCase):
         self.assertEqual(game_state["status"], "active")
         self.assertEqual(game_state["question_index"], 1)
 
-        # CRITICAL TEST: Yemot sends request preserving old URL query params (including Answer_Q0=3)
-        # Ensure system DOES NOT automatically accept Answer_Q0=3 as the answer for Answer_Q1!
-        res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=3&WaitAns_0=')
+        # CRITICAL TEST: Yemot sends request preserving old URL query params (including Answer_Q0=1)
+        # Ensure system DOES NOT automatically accept Answer_Q0=1 as the answer for Answer_Q1!
+        res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=1&WaitAns_0=')
         self.assertIn('Answer_Q1', res.get_data(as_text=True))
         self.assertIn('שאלה 2', res.get_data(as_text=True))
         self.assertNotIn('1', game_state["answers"])  # User has NOT answered question 1 yet!
 
         # Now user submits answer 1 for Answer_Q1
-        res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=3&WaitAns_0=&Answer_Q1=1')
+        res = self.client.get('/yemot?ApiCallId=CALL100&UserId=1&WaitLobby=&Answer_Q0=1&WaitAns_0=&Answer_Q1=1')
         self.assertIn('read=t-תשובתך התקבלה אנא המתן=WaitAns_1', res.get_data(as_text=True))
         self.assertIn('1', game_state["answers"])
         self.assertEqual(game_state["answers"]['1']['choice'], '1')
@@ -87,18 +117,22 @@ class TestYemotTrivia(unittest.TestCase):
         res = self.client.get('/display')
         data = res.get_json()
         self.assertEqual(data["status"], "lobby")
-        self.assertEqual(data["total_questions"], 4)
+        self.assertEqual(data["total_questions"], len(TEST_QUESTIONS))
 
         # Test reload endpoint
         res = self.client.post('/api/admin/reload')
         data = res.get_json()
         self.assertTrue(data["success"])
+        import flask_app
+        flask_app.QUESTIONS = [dict(q) for q in TEST_QUESTIONS]
 
         # Test reset endpoint
         self.client.get('/yemot?ApiCallId=CALL100&UserId=1')
-        self.client.post('/api/admin/reset')
+        res_reset = self.client.post('/api/admin/reset')
+        self.assertTrue(res_reset.get_json()["success"])
         self.assertEqual(game_state["status"], "lobby")
         self.assertEqual(len(game_state["connected_players"]), 0)
+        self.assertEqual(game_state["question_index"], 0)
 
     def test_poll_functionality(self):
         # Register User 1

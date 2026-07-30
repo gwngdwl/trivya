@@ -65,7 +65,7 @@
         <div class="lobby-title">ברוכים הבאים לטריוויה!</div>
         <div style="font-size: 2.5rem; color: white;">ממתינים להתחברות המשתתפים... (<span id="lobby-count">0</span>)</div>
         <div id="lobby-players" class="players-grid"></div>
-        <div style="margin-top: 40px; color: yellow; font-size: 1.5rem;">[לחץ על חץ ימינה במקלדת כדי להתחיל]</div>
+        <div style="margin-top: 40px; color: yellow; font-size: 1.5rem;">[לחץ על חץ ימינה במקלדת כדי להתחיל | מקש R להפעלה מחדש]</div>
     </div>
 
     <div id="game-board" class="game-board">
@@ -102,7 +102,7 @@
     <div id="global-leaderboard" class="global-leaderboard">
         <h2 id="gl-title">🏆 מובילים עד כה 🏆</h2>
         <table id="gl-table"></table>
-        <div style="margin-top: 30px; color: #7f8c8d; font-size: 1.2rem;">[לחץ על חץ ימינה כדי להמשיך]</div>
+        <div style="margin-top: 30px; color: #7f8c8d; font-size: 1.2rem;">[לחץ על חץ ימינה כדי להמשיך | מקש R להפעלה מחדש]</div>
     </div>
 
     <script>
@@ -128,7 +128,14 @@
             }
         }, 1000);
 
-        // ניהול מקשים משופר לפי הבקשה: חיצים קדימה/אחורה, רווח לעצירה
+        async function confirmResetGame() {
+            if (confirm("האם אתה בטוח שברצונך להפעיל מחדש את המשחק והניקוד?")) {
+                await fetch('/api/admin/reset', { method: 'POST' });
+                fetchGameState();
+            }
+        }
+
+        // ניהול מקשים משופר לפי הבקשה: חיצים קדימה/אחורה, רווח לעצירה, מקש R להפעלה מחדש
         window.addEventListener('keydown', async (event) => {
             if (event.code === 'Space') {
                 event.preventDefault();
@@ -141,6 +148,10 @@
             else if (event.code === 'ArrowLeft') {
                 event.preventDefault();
                 await fetch('/api/admin/prev', { method: 'POST' });
+            }
+            else if (event.code === 'KeyR' || event.key === 'r' || event.key === 'R' || event.key === 'ר') {
+                event.preventDefault();
+                confirmResetGame();
             }
         });
 
